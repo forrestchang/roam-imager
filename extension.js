@@ -5,20 +5,51 @@ const LIGHTBOX_ID = "imager-lightbox";
 let IMAGES_PER_ROW = 6; // Default images per row
 let IMAGES_PER_PAGE = 50; // Default images per page
 
-// Query all images from the graph
-async function getImages() {
+// Get parent and child blocks content for a given block uid
+async function getBlockContext(uid) {
     try {
-        console.log("Fetching images from graph...");
+        // Query for parent block
+        const parentQuery = `
+            [:find ?parent-string
+             :where
+             [?b :block/uid "${uid}"]
+             [?b :block/parents ?parent]
+             [?parent :block/string ?parent-string]]
+        `;
         
-        // Query for blocks containing markdown images
+        // Query for child blocks
+        const childrenQuery = `
+            [:find ?child-string
+             :where
+             [?b :block/uid "${uid}"]
+             [?b :block/children ?child]
+             [?child :block/string ?child-string]]
+        `;
+        
+        const parentResults = await window.roamAlphaAPI.q(parentQuery);
+        const childrenResults = await window.roamAlphaAPI.q(childrenQuery);
+        
+        const parentContent = parentResults.map(([content]) => content).join(' ');
+        const childrenContent = childrenResults.map(([content]) => content).join(' ');
+        
+        return { parentContent, childrenContent };
+    } catch (error) {
+        console.error(`Error fetching context for block ${uid}:`, error);
+        return { parentContent: '', childrenContent: '' };
+    }
+}
+
+// Get just the UIDs of blocks containing images (very fast)
+async function getImageBlockUids() {
+    try {
+        console.log("Getting image block UIDs...");
+        
         const query = `
-            [:find ?uid ?string ?create-time ?page-title
+            [:find ?uid ?create-time
              :where
              [?b :block/uid ?uid]
              [?b :block/string ?string]
              [(clojure.string/includes? ?string "![")]
-             [?b :block/page ?page]
-             [?page :node/title ?page-title]
              (or-join [?b ?create-time]
                (and [?b :create/time ?create-time])
                (and [(missing? $ ?b :create/time)]
@@ -28,38 +59,91 @@ async function getImages() {
         const results = await window.roamAlphaAPI.q(query);
         console.log(`Found ${results.length} blocks potentially containing images`);
         
-        // Extract images from blocks - only markdown format ![]()
-        const images = [];
-        
-        results.forEach(([uid, content, createTime, pageTitle]) => {
-            // Match markdown images - including empty alt text like ![](url)
-            const markdownRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
-            let match;
-            
-            while ((match = markdownRegex.exec(content)) !== null) {
-                const url = match[2];
-                if (url) {
-                    images.push({
-                        uid,
-                        url: url.trim(),
-                        alt: match[1] || "Image",
-                        createTime: createTime || Date.now(),
-                        pageTitle: pageTitle || "Untitled"
-                    });
-                }
-            }
-        });
-        
         // Sort by creation date (newest first)
-        images.sort((a, b) => b.createTime - a.createTime);
+        results.sort((a, b) => (b[1] || 0) - (a[1] || 0));
         
-        console.log(`Extracted ${images.length} unique images`);
-        return images;
-        
+        return results;
     } catch (error) {
-        console.error("Error fetching images:", error);
+        console.error("Error fetching image UIDs:", error);
         return [];
     }
+}
+
+// Process a batch of UIDs to extract images
+async function processImageBatch(uidBatch) {
+    const images = [];
+    
+    for (const [uid, createTime] of uidBatch) {
+        try {
+            // Get block content
+            const blockQuery = `
+                [:find ?string ?page-title
+                 :where
+                 [?b :block/uid "${uid}"]
+                 [?b :block/string ?string]
+                 [?b :block/page ?page]
+                 [?page :node/title ?page-title]]
+            `;
+            
+            const blockResult = await window.roamAlphaAPI.q(blockQuery);
+            if (blockResult.length > 0) {
+                const [content, pageTitle] = blockResult[0];
+                
+                // Extract images from content
+                const markdownRegex = /!\[([^\]]*)\]\(([^)]+)\)/g;
+                let match;
+                
+                while ((match = markdownRegex.exec(content)) !== null) {
+                    const url = match[2];
+                    if (url) {
+                        images.push({
+                            uid,
+                            url: url.trim(),
+                            alt: match[1] || "Image",
+                            createTime: createTime || Date.now(),
+                            pageTitle: pageTitle || "Untitled",
+                            blockContent: content,
+                            parentContent: '',
+                            childrenContent: '',
+                            searchableContent: `${content} ${pageTitle}`.toLowerCase(),
+                            contextLoaded: false
+                        });
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`Error processing UID ${uid}:`, error);
+        }
+    }
+    
+    return images;
+}
+
+// Enhance images with context data progressively
+async function enhanceImagesWithContext(images, onProgress) {
+    const batchSize = 10; // Process 10 images at a time
+    
+    for (let i = 0; i < images.length; i += batchSize) {
+        const batch = images.slice(i, Math.min(i + batchSize, images.length));
+        
+        // Process batch in parallel
+        await Promise.all(batch.map(async (image) => {
+            if (!image.contextLoaded) {
+                const { parentContent, childrenContent } = await getBlockContext(image.uid);
+                image.parentContent = parentContent;
+                image.childrenContent = childrenContent;
+                image.searchableContent = `${image.blockContent} ${parentContent} ${childrenContent} ${image.pageTitle}`.toLowerCase();
+                image.contextLoaded = true;
+            }
+        }));
+        
+        // Call progress callback
+        if (onProgress) {
+            onProgress(Math.min(i + batchSize, images.length), images.length);
+        }
+    }
+    
+    return images;
 }
 
 // Create lightbox for zoomed image view
@@ -129,12 +213,17 @@ function createLightbox(imageUrl, imageAlt) {
 }
 
 // Create image grid
-function createImageGrid(images, page, container) {
+function createImageGrid(images, page, container, allImages = null) {
     container.innerHTML = "";
     
     // Store data for refresh
     container.dataset.images = JSON.stringify(images);
     container.dataset.currentPage = page;
+    
+    // Store all images if provided (for search functionality)
+    if (allImages) {
+        container.dataset.allImages = JSON.stringify(allImages);
+    }
     
     const startIdx = (page - 1) * IMAGES_PER_PAGE;
     const endIdx = Math.min(startIdx + IMAGES_PER_PAGE, images.length);
@@ -429,11 +518,40 @@ function createPopup() {
     leftSection.appendChild(title);
     leftSection.appendChild(configSection);
     
+    // Add search input in the middle
+    const searchSection = document.createElement("div");
+    searchSection.style.cssText = "flex: 1; max-width: 300px; margin: 0 20px;";
+    
+    const searchInput = document.createElement("input");
+    searchInput.className = "bp3-input";
+    searchInput.type = "text";
+    searchInput.placeholder = "Loading images... Search will be available soon";
+    searchInput.style.cssText = "width: 100%; opacity: 0.6;";
+    searchInput.disabled = true; // Start disabled
+    searchInput.id = "imager-search-input";
+    
+    searchInput.oninput = (e) => {
+        const searchTerm = e.target.value.toLowerCase();
+        if (content.dataset.allImages) {
+            const allImages = JSON.parse(content.dataset.allImages);
+            const filteredImages = searchTerm 
+                ? allImages.filter(img => img.searchableContent.includes(searchTerm))
+                : allImages;
+            
+            // Update displayed images
+            content.dataset.images = JSON.stringify(filteredImages);
+            createImageGrid(filteredImages, 1, content);
+        }
+    };
+    
+    searchSection.appendChild(searchInput);
+    
     const closeBtn = document.createElement("button");
     closeBtn.className = "bp3-button bp3-minimal bp3-icon-cross";
     closeBtn.onclick = () => overlay.remove();
     
     header.appendChild(leftSection);
+    header.appendChild(searchSection);
     header.appendChild(closeBtn);
     
     // Content area
@@ -449,12 +567,17 @@ function createPopup() {
     const loading = document.createElement("div");
     loading.style.cssText = `
         display: flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         height: 200px;
         color: #666;
+        gap: 10px;
     `;
-    loading.textContent = "Loading images...";
+    loading.innerHTML = `
+        <div>Loading images...</div>
+        <div style="font-size: 12px; opacity: 0.7;">Fetching image blocks and their context</div>
+    `;
     content.appendChild(loading);
     
     popup.appendChild(header);
@@ -488,24 +611,7 @@ function createTopbarButton() {
     button.style.cssText = "margin: 0 4px;";
     
     button.onclick = async () => {
-        // Check if popup already exists
-        if (document.getElementById(POPUP_ID)) return;
-        
-        const { overlay, content } = createPopup();
-        document.body.appendChild(overlay);
-        
-        // Load images
-        const images = await getImages();
-        
-        if (images.length === 0) {
-            content.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: center; height: 200px; color: #666;">
-                    No images found in your graph
-                </div>
-            `;
-        } else {
-            createImageGrid(images, 1, content);
-        }
+        showImageGallery();
     };
     
     return button;
@@ -518,16 +624,102 @@ async function showImageGallery() {
     const { overlay, content } = createPopup();
     document.body.appendChild(overlay);
     
-    const images = await getImages();
+    // Get just the UIDs first (very fast)
+    const imageUids = await getImageBlockUids();
     
-    if (images.length === 0) {
+    if (imageUids.length === 0) {
         content.innerHTML = `
             <div style="display: flex; align-items: center; justify-content: center; height: 200px; color: #666;">
                 No images found in your graph
             </div>
         `;
+        return;
+    }
+    
+    // Process first batch immediately to show something
+    const firstBatchSize = Math.min(50, imageUids.length); // Show first 50 images immediately
+    const firstBatch = imageUids.slice(0, firstBatchSize);
+    const remainingUids = imageUids.slice(firstBatchSize);
+    
+    // Process first batch
+    const firstImages = await processImageBatch(firstBatch);
+    const allImages = [...firstImages];
+    
+    // Show first images immediately
+    createImageGrid(allImages, 1, content, allImages);
+    
+    // Add loading indicator for remaining images
+    if (remainingUids.length > 0) {
+        const loadingInfo = document.createElement("div");
+        loadingInfo.style.cssText = `
+            position: absolute;
+            top: 60px;
+            right: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            z-index: 100;
+        `;
+        loadingInfo.textContent = `Loading ${firstImages.length} of ${imageUids.length} images...`;
+        overlay.appendChild(loadingInfo);
+        
+        // Process remaining images in background
+        const batchSize = 50;
+        let processed = firstBatchSize;
+        
+        for (let i = 0; i < remainingUids.length; i += batchSize) {
+            const batch = remainingUids.slice(i, Math.min(i + batchSize, remainingUids.length));
+            const newImages = await processImageBatch(batch);
+            
+            // Add new images to the array
+            allImages.push(...newImages);
+            processed += batch.length;
+            
+            // Update loading info
+            loadingInfo.textContent = `Loading ${allImages.length} of ${imageUids.length} images...`;
+            
+            // Update the grid if we're on page 1
+            const currentPage = parseInt(content.dataset.currentPage) || 1;
+            if (currentPage === 1) {
+                createImageGrid(allImages, 1, content, allImages);
+            } else {
+                // Just update the stored data
+                content.dataset.allImages = JSON.stringify(allImages);
+                content.dataset.images = JSON.stringify(allImages);
+            }
+            
+            // Small delay to prevent UI blocking
+            await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        
+        // Remove loading indicator
+        loadingInfo.remove();
+        
+        // Enable search after all images are loaded
+        const searchInput = document.getElementById('imager-search-input');
+        if (searchInput) {
+            searchInput.disabled = false;
+            searchInput.placeholder = "Search images...";
+            searchInput.style.opacity = "1";
+        }
+        
+        // Now enhance with context in background (optional, lower priority)
+        enhanceImagesWithContext(allImages, (processed, total) => {
+            // Update the stored data silently
+            if (content.dataset.allImages) {
+                content.dataset.allImages = JSON.stringify(allImages);
+            }
+        });
     } else {
-        createImageGrid(images, 1, content);
+        // If no remaining images, enable search immediately
+        const searchInput = document.getElementById('imager-search-input');
+        if (searchInput) {
+            searchInput.disabled = false;
+            searchInput.placeholder = "Search images...";
+            searchInput.style.opacity = "1";
+        }
     }
 }
 
