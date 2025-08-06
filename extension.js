@@ -96,18 +96,22 @@ async function processImageBatch(uidBatch) {
                 while ((match = markdownRegex.exec(content)) !== null) {
                     const url = match[2];
                     if (url) {
-                        images.push({
-                            uid,
-                            url: url.trim(),
-                            alt: match[1] || "Image",
-                            createTime: createTime || Date.now(),
-                            pageTitle: pageTitle || "Untitled",
-                            blockContent: content,
-                            parentContent: '',
-                            childrenContent: '',
-                            searchableContent: `${content} ${pageTitle}`.toLowerCase(),
-                            contextLoaded: false
-                        });
+                        // Filter out images from mmbiz.qpic.cn domain
+                        const trimmedUrl = url.trim();
+                        if (!trimmedUrl.includes('mmbiz.qpic.cn')) {
+                            images.push({
+                                uid,
+                                url: trimmedUrl,
+                                alt: match[1] || "Image",
+                                createTime: createTime || Date.now(),
+                                pageTitle: pageTitle || "Untitled",
+                                blockContent: content,
+                                parentContent: '',
+                                childrenContent: '',
+                                searchableContent: `${content} ${pageTitle}`.toLowerCase(),
+                                contextLoaded: false
+                            });
+                        }
                     }
                 }
             }
