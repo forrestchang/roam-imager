@@ -476,15 +476,21 @@ function createPopup() {
         box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     `;
     
-    // Header
+    // Header container for both rows
+    const headerContainer = document.createElement("div");
+    headerContainer.style.cssText = `
+        border-bottom: 1px solid #e0e0e0;
+    `;
+    
+    // First row - Title, config options, and close button
     const header = document.createElement("div");
     header.className = "bp3-dialog-header";
     header.style.cssText = `
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 16px 24px;
-        border-bottom: 1px solid #e0e0e0;
+        padding: 16px 24px 8px 24px;
+        border-bottom: none;
     `;
     
     const leftSection = document.createElement("div");
@@ -615,12 +621,23 @@ function createPopup() {
     leftSection.appendChild(title);
     leftSection.appendChild(configSection);
     
-    // Add search input in the middle
-    const searchSection = document.createElement("div");
-    searchSection.style.cssText = "flex: 1; max-width: 300px; margin: 0 20px;";
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "bp3-button bp3-minimal bp3-icon-cross";
+    closeBtn.onclick = () => overlay.remove();
+    
+    header.appendChild(leftSection);
+    header.appendChild(closeBtn);
+    
+    // Second row - Search bar
+    const searchRow = document.createElement("div");
+    searchRow.style.cssText = `
+        padding: 8px 24px 16px 24px;
+        display: flex;
+        align-items: center;
+    `;
     
     const searchInput = document.createElement("input");
-    searchInput.className = "bp3-input";
+    searchInput.className = "bp3-input bp3-large";
     searchInput.type = "text";
     searchInput.placeholder = "Loading images... Search will be available soon";
     searchInput.style.cssText = "width: 100%; opacity: 0.6;";
@@ -644,15 +661,11 @@ function createPopup() {
         }
     };
     
-    searchSection.appendChild(searchInput);
+    searchRow.appendChild(searchInput);
     
-    const closeBtn = document.createElement("button");
-    closeBtn.className = "bp3-button bp3-minimal bp3-icon-cross";
-    closeBtn.onclick = () => overlay.remove();
-    
-    header.appendChild(leftSection);
-    header.appendChild(searchSection);
-    header.appendChild(closeBtn);
+    // Assemble the header container
+    headerContainer.appendChild(header);
+    headerContainer.appendChild(searchRow);
     
     // Content area
     const content = document.createElement("div");
@@ -680,7 +693,7 @@ function createPopup() {
     `;
     content.appendChild(loading);
     
-    popup.appendChild(header);
+    popup.appendChild(headerContainer);
     popup.appendChild(content);
     overlay.appendChild(popup);
     
