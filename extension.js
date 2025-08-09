@@ -4,6 +4,7 @@ const POPUP_ID = "imager-popup";
 const LIGHTBOX_ID = "imager-lightbox";
 let IMAGES_PER_ROW = 6; // Default images per row
 let IMAGES_PER_PAGE = 50; // Default images per page
+let SORT_ORDER = 'newest'; // Default sort order: 'newest', 'oldest', 'page-alpha', 'page-reverse'
 
 // Get parent and child blocks content for a given block uid
 async function getBlockContext(uid) {
@@ -26,16 +27,33 @@ async function getBlockContext(uid) {
              [?child :block/string ?child-string]]
         `;
         
+        // Query for sibling blocks (previous and next)
+        const siblingsQuery = `
+            [:find ?sibling-string ?sibling-order
+             :where
+             [?b :block/uid "${uid}"]
+             [?b :block/order ?current-order]
+             [?parent :block/children ?b]
+             [?parent :block/children ?sibling]
+             [?sibling :block/order ?sibling-order]
+             [?sibling :block/string ?sibling-string]
+             [(not= ?b ?sibling)]
+             [(>= ?sibling-order (- ?current-order 1))]
+             [(<= ?sibling-order (+ ?current-order 1))]]
+        `;
+        
         const parentResults = await window.roamAlphaAPI.q(parentQuery);
         const childrenResults = await window.roamAlphaAPI.q(childrenQuery);
+        const siblingsResults = await window.roamAlphaAPI.q(siblingsQuery);
         
         const parentContent = parentResults.map(([content]) => content).join(' ');
         const childrenContent = childrenResults.map(([content]) => content).join(' ');
+        const siblingsContent = siblingsResults.map(([content]) => content).join(' ');
         
-        return { parentContent, childrenContent };
+        return { parentContent, childrenContent, siblingsContent };
     } catch (error) {
         console.error(`Error fetching context for block ${uid}:`, error);
-        return { parentContent: '', childrenContent: '' };
+        return { parentContent: '', childrenContent: '', siblingsContent: '' };
     }
 }
 
@@ -108,6 +126,7 @@ async function processImageBatch(uidBatch) {
                                 blockContent: content,
                                 parentContent: '',
                                 childrenContent: '',
+                                siblingsContent: '',
                                 searchableContent: `${content} ${pageTitle}`.toLowerCase(),
                                 contextLoaded: false
                             });
@@ -133,10 +152,11 @@ async function enhanceImagesWithContext(images, onProgress) {
         // Process batch in parallel
         await Promise.all(batch.map(async (image) => {
             if (!image.contextLoaded) {
-                const { parentContent, childrenContent } = await getBlockContext(image.uid);
+                const { parentContent, childrenContent, siblingsContent } = await getBlockContext(image.uid);
                 image.parentContent = parentContent;
                 image.childrenContent = childrenContent;
-                image.searchableContent = `${image.blockContent} ${parentContent} ${childrenContent} ${image.pageTitle}`.toLowerCase();
+                image.siblingsContent = siblingsContent;
+                image.searchableContent = `${image.blockContent} ${parentContent} ${childrenContent} ${siblingsContent} ${image.pageTitle}`.toLowerCase();
                 image.contextLoaded = true;
             }
         }));
@@ -148,6 +168,35 @@ async function enhanceImagesWithContext(images, onProgress) {
     }
     
     return images;
+}
+
+// Sort images based on selected criteria
+function sortImages(images, sortOrder) {
+    const sorted = [...images];
+    
+    switch (sortOrder) {
+        case 'newest':
+            // Sort by creation time, newest first (default)
+            sorted.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
+            break;
+        case 'oldest':
+            // Sort by creation time, oldest first
+            sorted.sort((a, b) => (a.createTime || 0) - (b.createTime || 0));
+            break;
+        case 'page-alpha':
+            // Sort by page title alphabetically
+            sorted.sort((a, b) => a.pageTitle.localeCompare(b.pageTitle));
+            break;
+        case 'page-reverse':
+            // Sort by page title reverse alphabetically
+            sorted.sort((a, b) => b.pageTitle.localeCompare(a.pageTitle));
+            break;
+        default:
+            // Default to newest first
+            sorted.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
+    }
+    
+    return sorted;
 }
 
 // Create lightbox for zoomed image view
@@ -516,8 +565,52 @@ function createPopup() {
     pageConfig.appendChild(pageLabel);
     pageConfig.appendChild(pageSelector);
     
+    // Sort order selector
+    const sortConfig = document.createElement("div");
+    sortConfig.style.cssText = "display: flex; align-items: center; gap: 8px;";
+    
+    const sortLabel = document.createElement("span");
+    sortLabel.textContent = "Sort by:";
+    sortLabel.style.color = "#5c7080";
+    
+    const sortSelector = document.createElement("select");
+    sortSelector.className = "bp3-select";
+    
+    const sortOptions = [
+        { value: 'newest', text: 'Newest First' },
+        { value: 'oldest', text: 'Oldest First' },
+        { value: 'page-alpha', text: 'Page Title (A-Z)' },
+        { value: 'page-reverse', text: 'Page Title (Z-A)' }
+    ];
+    
+    sortOptions.forEach(opt => {
+        const option = document.createElement("option");
+        option.value = opt.value;
+        option.textContent = opt.text;
+        if (opt.value === SORT_ORDER) option.selected = true;
+        sortSelector.appendChild(option);
+    });
+    
+    sortSelector.onchange = (e) => {
+        SORT_ORDER = e.target.value;
+        // Store preference
+        localStorage.setItem('imager-sort-order', SORT_ORDER);
+        // Re-sort and refresh the grid
+        if (content.dataset.allImages) {
+            const allImages = JSON.parse(content.dataset.allImages);
+            const sortedImages = sortImages(allImages, SORT_ORDER);
+            content.dataset.allImages = JSON.stringify(sortedImages);
+            content.dataset.images = JSON.stringify(sortedImages);
+            createImageGrid(sortedImages, 1, content, sortedImages);
+        }
+    };
+    
+    sortConfig.appendChild(sortLabel);
+    sortConfig.appendChild(sortSelector);
+    
     configSection.appendChild(rowConfig);
     configSection.appendChild(pageConfig);
+    configSection.appendChild(sortConfig);
     
     leftSection.appendChild(title);
     leftSection.appendChild(configSection);
@@ -538,9 +631,12 @@ function createPopup() {
         const searchTerm = e.target.value.toLowerCase();
         if (content.dataset.allImages) {
             const allImages = JSON.parse(content.dataset.allImages);
-            const filteredImages = searchTerm 
+            let filteredImages = searchTerm 
                 ? allImages.filter(img => img.searchableContent.includes(searchTerm))
                 : allImages;
+            
+            // Apply current sort order to filtered results
+            filteredImages = sortImages(filteredImages, SORT_ORDER);
             
             // Update displayed images
             content.dataset.images = JSON.stringify(filteredImages);
@@ -647,7 +743,10 @@ async function showImageGallery() {
     
     // Process first batch
     const firstImages = await processImageBatch(firstBatch);
-    const allImages = [...firstImages];
+    let allImages = [...firstImages];
+    
+    // Apply initial sorting
+    allImages = sortImages(allImages, SORT_ORDER);
     
     // Show first images immediately
     createImageGrid(allImages, 1, content, allImages);
@@ -680,6 +779,9 @@ async function showImageGallery() {
             // Add new images to the array
             allImages.push(...newImages);
             processed += batch.length;
+            
+            // Re-sort all images with current sort order
+            allImages = sortImages(allImages, SORT_ORDER);
             
             // Update loading info
             loadingInfo.textContent = `Loading ${allImages.length} of ${imageUids.length} images...`;
@@ -741,6 +843,11 @@ export default {
         const savedImagesPerPage = localStorage.getItem('imager-images-per-page');
         if (savedImagesPerPage) {
             IMAGES_PER_PAGE = parseInt(savedImagesPerPage);
+        }
+        
+        const savedSortOrder = localStorage.getItem('imager-sort-order');
+        if (savedSortOrder) {
+            SORT_ORDER = savedSortOrder;
         }
         
         // Register command palette command
