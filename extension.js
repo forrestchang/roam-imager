@@ -282,13 +282,12 @@ function createImageGrid(images, page, container, allImages = null) {
     const endIdx = Math.min(startIdx + IMAGES_PER_PAGE, images.length);
     const pageImages = images.slice(startIdx, endIdx);
     
-    // Create grid container
+    // Create masonry container
     const grid = document.createElement("div");
-    const minWidth = Math.floor(1000 / IMAGES_PER_ROW) - 20; // Calculate min width based on images per row
+    const columnWidth = `calc((100% - ${(IMAGES_PER_ROW - 1) * 16}px) / ${IMAGES_PER_ROW})`;
     grid.style.cssText = `
-        display: grid;
-        grid-template-columns: repeat(${IMAGES_PER_ROW}, 1fr);
-        gap: 16px;
+        column-count: ${IMAGES_PER_ROW};
+        column-gap: 16px;
         padding: 20px;
     `;
     
@@ -301,7 +300,10 @@ function createImageGrid(images, page, container, allImages = null) {
             overflow: hidden;
             cursor: zoom-in;
             transition: transform 0.2s;
-            aspect-ratio: 1;
+            break-inside: avoid;
+            margin-bottom: 16px;
+            display: inline-block;
+            width: 100%;
         `;
         
         imageContainer.onmouseover = () => {
@@ -317,8 +319,8 @@ function createImageGrid(images, page, container, allImages = null) {
         img.alt = image.alt;
         img.style.cssText = `
             width: 100%;
-            height: 100%;
-            object-fit: cover;
+            height: auto;
+            display: block;
         `;
         
         img.onerror = () => {
@@ -326,7 +328,7 @@ function createImageGrid(images, page, container, allImages = null) {
             const placeholder = document.createElement("div");
             placeholder.style.cssText = `
                 width: 100%;
-                height: 100%;
+                height: 200px;
                 display: flex;
                 align-items: center;
                 justify-content: center;
