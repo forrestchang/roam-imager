@@ -121,7 +121,7 @@ async function processImageBatch(uidBatch) {
                                 uid,
                                 url: trimmedUrl,
                                 alt: match[1] || "Image",
-                                createTime: createTime || Date.now(),
+                                createTime: createTime > 0 ? createTime : null,
                                 pageTitle: pageTitle || "Untitled",
                                 blockContent: content,
                                 parentContent: '',
@@ -176,12 +176,24 @@ function sortImages(images, sortOrder) {
     
     switch (sortOrder) {
         case 'newest':
-            // Sort by creation time, newest first (default)
-            sorted.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
+            // Sort by creation time, newest first
+            // Put items with no timestamp at the end
+            sorted.sort((a, b) => {
+                if (a.createTime === null && b.createTime === null) return 0;
+                if (a.createTime === null) return 1;
+                if (b.createTime === null) return -1;
+                return b.createTime - a.createTime;
+            });
             break;
         case 'oldest':
             // Sort by creation time, oldest first
-            sorted.sort((a, b) => (a.createTime || 0) - (b.createTime || 0));
+            // Put items with no timestamp at the end
+            sorted.sort((a, b) => {
+                if (a.createTime === null && b.createTime === null) return 0;
+                if (a.createTime === null) return 1;
+                if (b.createTime === null) return -1;
+                return a.createTime - b.createTime;
+            });
             break;
         case 'page-alpha':
             // Sort by page title alphabetically
@@ -193,7 +205,12 @@ function sortImages(images, sortOrder) {
             break;
         default:
             // Default to newest first
-            sorted.sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
+            sorted.sort((a, b) => {
+                if (a.createTime === null && b.createTime === null) return 0;
+                if (a.createTime === null) return 1;
+                if (b.createTime === null) return -1;
+                return b.createTime - a.createTime;
+            });
     }
     
     return sorted;
@@ -370,7 +387,7 @@ function createImageGrid(images, page, container, allImages = null) {
         infoText.style.cssText = "flex: 1; overflow: hidden;";
         infoText.innerHTML = `
             <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500;">${image.pageTitle}</div>
-            <div style="opacity: 0.7; font-size: 11px;">${new Date(image.createTime).toLocaleDateString()}</div>
+            <div style="opacity: 0.7; font-size: 11px;">${image.createTime ? new Date(image.createTime).toLocaleDateString() : 'No date'}</div>
         `;
         
         const navButton = document.createElement("button");
