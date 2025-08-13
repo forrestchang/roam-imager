@@ -299,16 +299,43 @@ function createImageGrid(images, page, container, allImages = null) {
     const endIdx = Math.min(startIdx + IMAGES_PER_PAGE, images.length);
     const pageImages = images.slice(startIdx, endIdx);
     
-    // Create masonry container
+    // Create masonry container with flexbox
     const grid = document.createElement("div");
-    const columnWidth = `calc((100% - ${(IMAGES_PER_ROW - 1) * 16}px) / ${IMAGES_PER_ROW})`;
     grid.style.cssText = `
-        column-count: ${IMAGES_PER_ROW};
-        column-gap: 16px;
+        display: flex;
+        gap: 16px;
         padding: 20px;
+        align-items: flex-start;
     `;
     
-    pageImages.forEach(image => {
+    // Create columns for masonry
+    const columns = [];
+    for (let i = 0; i < IMAGES_PER_ROW; i++) {
+        const column = document.createElement("div");
+        column.style.cssText = `
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        `;
+        columns.push(column);
+        grid.appendChild(column);
+    }
+    
+    // Track the estimated height of each column
+    const columnHeights = new Array(IMAGES_PER_ROW).fill(0);
+    
+    pageImages.forEach((image, idx) => {
+        // Find the shortest column
+        let minHeight = columnHeights[0];
+        let targetColumn = 0;
+        for (let i = 1; i < IMAGES_PER_ROW; i++) {
+            if (columnHeights[i] < minHeight) {
+                minHeight = columnHeights[i];
+                targetColumn = i;
+            }
+        }
+        
         const imageContainer = document.createElement("div");
         imageContainer.style.cssText = `
             position: relative;
@@ -317,9 +344,6 @@ function createImageGrid(images, page, container, allImages = null) {
             overflow: hidden;
             cursor: zoom-in;
             transition: transform 0.2s;
-            break-inside: avoid;
-            margin-bottom: 16px;
-            display: inline-block;
             width: 100%;
         `;
         
@@ -417,7 +441,13 @@ function createImageGrid(images, page, container, allImages = null) {
         
         imageContainer.appendChild(img);
         imageContainer.appendChild(info);
-        grid.appendChild(imageContainer);
+        
+        // Add to the selected column
+        columns[targetColumn].appendChild(imageContainer);
+        
+        // Estimate the height this image will take (can be refined with actual image dimensions)
+        // Using a rough estimate: most images are between 200-400px tall
+        columnHeights[targetColumn] += 300;
     });
     
     container.appendChild(grid);
