@@ -239,15 +239,95 @@ function createLightbox(imageUrl, imageAlt) {
         padding: 40px;
     `;
     
+    // Container for image and copy button
+    const contentContainer = document.createElement("div");
+    contentContainer.style.cssText = `
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 20px;
+        max-width: 90%;
+        max-height: 90%;
+    `;
+    
     const img = document.createElement("img");
     img.src = imageUrl;
     img.alt = imageAlt;
     img.style.cssText = `
         max-width: 100%;
-        max-height: 100%;
+        max-height: calc(100% - 60px);
         object-fit: contain;
         box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+        cursor: default;
     `;
+    
+    // Copy to clipboard button
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "bp3-button bp3-intent-primary";
+    copyBtn.innerHTML = '<span class="bp3-icon bp3-icon-duplicate"></span> Copy Image to Clipboard';
+    copyBtn.style.cssText = `
+        background: rgba(255, 255, 255, 0.9);
+        color: #106ba3;
+        font-weight: 500;
+        padding: 10px 20px;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: all 0.2s;
+    `;
+    
+    copyBtn.onmouseover = () => {
+        copyBtn.style.background = "rgba(255, 255, 255, 1)";
+        copyBtn.style.transform = "scale(1.05)";
+    };
+    
+    copyBtn.onmouseout = () => {
+        copyBtn.style.background = "rgba(255, 255, 255, 0.9)";
+        copyBtn.style.transform = "scale(1)";
+    };
+    
+    copyBtn.onclick = async (e) => {
+        e.stopPropagation();
+        
+        try {
+            // Fetch the image and convert to blob
+            const response = await fetch(imageUrl);
+            const blob = await response.blob();
+            
+            // Create clipboard item
+            const clipboardItem = new ClipboardItem({
+                [blob.type]: blob
+            });
+            
+            // Copy to clipboard
+            await navigator.clipboard.write([clipboardItem]);
+            
+            // Show success feedback
+            const originalText = copyBtn.innerHTML;
+            copyBtn.innerHTML = '<span class="bp3-icon bp3-icon-tick"></span> Copied!';
+            copyBtn.style.background = "#0f9960";
+            copyBtn.style.color = "white";
+            
+            setTimeout(() => {
+                copyBtn.innerHTML = originalText;
+                copyBtn.style.background = "rgba(255, 255, 255, 0.9)";
+                copyBtn.style.color = "#106ba3";
+            }, 2000);
+        } catch (error) {
+            console.error("Failed to copy image:", error);
+            
+            // Show error feedback
+            const originalText = copyBtn.innerHTML;
+            copyBtn.innerHTML = '<span class="bp3-icon bp3-icon-error"></span> Copy failed';
+            copyBtn.style.background = "#db3737";
+            copyBtn.style.color = "white";
+            
+            setTimeout(() => {
+                copyBtn.innerHTML = originalText;
+                copyBtn.style.background = "rgba(255, 255, 255, 0.9)";
+                copyBtn.style.color = "#106ba3";
+            }, 2000);
+        }
+    };
     
     // Close button
     const closeBtn = document.createElement("button");
@@ -268,6 +348,11 @@ function createLightbox(imageUrl, imageAlt) {
         }
     };
     
+    // Prevent closing when clicking on image or copy button
+    contentContainer.onclick = (e) => {
+        e.stopPropagation();
+    };
+    
     // Close on Escape key
     const escHandler = (e) => {
         if (e.key === "Escape") {
@@ -277,7 +362,9 @@ function createLightbox(imageUrl, imageAlt) {
     };
     document.addEventListener("keydown", escHandler);
     
-    lightbox.appendChild(img);
+    contentContainer.appendChild(img);
+    contentContainer.appendChild(copyBtn);
+    lightbox.appendChild(contentContainer);
     lightbox.appendChild(closeBtn);
     document.body.appendChild(lightbox);
 }
